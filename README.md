@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # GitHub Repository Bridge API
 
 A simple FastAPI service that stores GitHub repository metadata in PostgreSQL.
