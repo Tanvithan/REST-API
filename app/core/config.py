@@ -1,17 +1,20 @@
-from pydantic import Field
-from pydantic_settings import BaseSettings
 from typing import Optional
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = Field(..., env="DATABASE_URL")
-    github_token: Optional[str] = Field(None, env="GITHUB_TOKEN")
-    github_api_base: str = Field("https://api.github.com", env="GITHUB_API_BASE")
-    external_api_timeout: int = Field(10, env="EXTERNAL_API_TIMEOUT")
+    """Application configuration loaded from environment variables."""
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    database_url: str = Field(..., validation_alias="DATABASE_URL")
+    github_token: Optional[str] = Field(None, validation_alias="GITHUB_TOKEN")
+    github_api_base: str = Field(
+        "https://api.github.com", validation_alias="GITHUB_API_BASE"
+    )
+    external_api_timeout: int = Field(10, validation_alias="EXTERNAL_API_TIMEOUT")
 
 
 settings = Settings()

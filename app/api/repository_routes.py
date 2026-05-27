@@ -38,31 +38,3 @@ async def delete_repo(repo_id: int, session: AsyncSession = Depends(get_db_sessi
     service = RepositoryService(session)
     await service.delete(repo_id)
     return Response(status_code=204)
-
-
-@router.post("/", response_model=RepositoryRead, status_code=201)
-async def create_repo(payload: RepositoryCreate, session: AsyncSession = Depends(get_db_session)) -> RepositoryRead:
-    service = RepositoryService(session)
-    return await service.create(payload.identifier)
-
-
-@router.get("/{repo_id}", response_model=RepositoryRead)
-async def get_repo(repo_id: int, session: AsyncSession = Depends(get_db_session)) -> RepositoryRead:
-    service = RepositoryService(session)
-    repo = await service.get(repo_id)
-    if repo is None:
-        raise HTTPException(status_code=404, detail="Repository not found.")
-    return repo
-
-
-@router.put("/{repo_id}", response_model=RepositoryRead)
-async def refresh_repo(repo_id: int, session: AsyncSession = Depends(get_db_session)) -> RepositoryRead:
-    service = RepositoryService(session)
-    return await service.refresh(repo_id)
-
-
-@router.delete("/{repo_id}", status_code=204)
-async def delete_repo(repo_id: int, session: AsyncSession = Depends(get_db_session)) -> Response:
-    service = RepositoryService(session)
-    await service.delete(repo_id)
-    return Response(status_code=204)

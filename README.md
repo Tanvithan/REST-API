@@ -1,28 +1,27 @@
-<<<<<<< HEAD
 # GitHub Repository Bridge API
 
-A simple FastAPI service that stores GitHub repository metadata in PostgreSQL.
+A FastAPI service that stores GitHub repository metadata in PostgreSQL.
 
 ## Project overview
 
-This service accepts a GitHub repository URL or `owner/repository` identifier, fetches repository metadata from GitHub, and stores it in a local PostgreSQL database. It provides CRUD operations for stored entries and keeps the data fresh with a refresh endpoint.
+This service accepts a GitHub repository URL or `owner/repository` identifier, fetches metadata from the GitHub REST API, and stores the result in a local PostgreSQL database. I chose GitHub because it has stable JSON responses, clear repository identifiers, and optional token authentication for higher rate limits.
 
 ## Architecture summary
 
-The code is split into clear layers:
+The application uses a layered structure:
 
-- **API layer**: `app/api/repository_routes.py` defines the HTTP routes.
+- **API layer**: `app/api/repository_routes.py` defines the HTTP routes and status codes.
+- **Schema layer**: `app/schemas/repository.py` validates request bodies before service logic runs.
 - **Service layer**: `app/services/` contains business logic and GitHub API integration.
-- **Data layer**: `app/db/` handles the async SQLAlchemy database connection, ORM model, and database operations.
-- **Schema layer**: `app/schemas/repository.py` validates input and serializes response data.
+- **Data layer**: `app/db/` contains the async SQLAlchemy setup, ORM model, and database access functions.
 
-When a client sends `POST /repos/`, the request is validated, GitHub data is fetched, mapped into the internal model, saved to the database, and returned as JSON.
+For `POST /repos/`, FastAPI validates the body with `RepositoryCreate`, the service checks for duplicates, GitHub metadata is fetched with `httpx.AsyncClient`, the response is mapped into the ORM shape, and the record is committed to PostgreSQL.
 
 ## Prerequisites
 
 - Python 3.10 or higher
 - PostgreSQL 13 or higher
-- `git`
+- Git
 
 ## Setup instructions
 
@@ -43,7 +42,7 @@ python -m venv .venv
 3. Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 4. Copy `.env.example` to `.env` and update the values:
@@ -52,7 +51,7 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-5. Create a PostgreSQL database and set its URL in `.env`.
+5. Create a PostgreSQL database, for example `github_bridge`.
 
 6. Initialize the database schema:
 
@@ -66,22 +65,24 @@ python -m app.init_db
 uvicorn app.main:app --reload
 ```
 
+The API will be available at `http://127.0.0.1:8000`.
+
 ## Environment variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DATABASE_URL` | yes | none | PostgreSQL connection string | 
-| `GITHUB_TOKEN` | no | empty | Optional GitHub token for higher rate limits | 
-| `EXTERNAL_API_TIMEOUT` | no | `10` | GitHub request timeout in seconds | 
-| `GITHUB_API_BASE` | no | `https://api.github.com` | GitHub API base URL | 
+| `DATABASE_URL` | Yes | None | Async SQLAlchemy PostgreSQL connection string. |
+| `GITHUB_TOKEN` | No | Empty | Optional GitHub token used for higher API rate limits. |
+| `EXTERNAL_API_TIMEOUT` | No | `10` | Timeout in seconds for GitHub API requests. |
+| `GITHUB_API_BASE` | No | `https://api.github.com` | Base URL for the GitHub API. |
 
 ## API reference
 
 ### POST /repos/
 
-Create a new repository record.
+Creates a new stored repository record from GitHub.
 
-Request body:
+Request body with identifier:
 
 ```json
 {
@@ -89,7 +90,7 @@ Request body:
 }
 ```
 
-Or:
+Request body with URL:
 
 ```json
 {
@@ -97,15 +98,7 @@ Or:
 }
 ```
 
-Responses:
-
-- `201 Created`
-- `409 Conflict` if the repository already exists
-- `422 Unprocessable Entity` if input is invalid
-- `502 Bad Gateway` if GitHub returns an unexpected error
-- `503 Service Unavailable` if GitHub is unreachable or times out
-
-Example response:
+`201 Created`
 
 ```json
 {
@@ -120,82 +113,220 @@ Example response:
   "forks_count": 650,
   "open_issues_count": 45,
   "language": "Python",
-  "raw_data": { ... },
+  "raw_data": {},
   "created_at": "2026-05-01T12:00:00+00:00",
   "updated_at": "2026-05-01T12:00:00+00:00",
   "fetched_at": "2026-05-01T12:00:00+00:00"
 }
 ```
 
+`409 Conflict`
+
+```json
+{
+  "detail": "Repository already exists."
+}
+```
+
+`422 Unprocessable Entity`
+
+```json
+{
+  "detail": [
+    {
+      "type": "value_error",
+      "loc": ["body"],
+      "msg": "Value error, Identifier must be in the format owner/repository."
+    }
+  ]
+}
+```
+
+`404 Not Found`
+
+```json
+{
+  "detail": "Repository not found on GitHub."
+}
+```
+
+`502 Bad Gateway`
+
+```json
+{
+  "detail": "GitHub API returned status 500."
+}
+```
+
+`503 Service Unavailable`
+
+```json
+{
+  "detail": "Unable to reach GitHub API."
+}
+```
+
 ### GET /repos/{id}
 
-Retrieve a stored repository by local database ID.
+Retrieves a stored repository by local database ID. This endpoint reads only from the local database.
 
-Responses:
+`200 OK`
 
-- `200 OK` with the repository record
-- `404 Not Found` if the ID does not exist
+```json
+{
+  "id": 1,
+  "external_id": "encode/starlette",
+  "full_name": "encode/starlette",
+  "owner": "encode",
+  "name": "starlette",
+  "description": "The little ASGI framework that shines.",
+  "html_url": "https://github.com/encode/starlette",
+  "stargazers_count": 8500,
+  "forks_count": 650,
+  "open_issues_count": 45,
+  "language": "Python",
+  "raw_data": {},
+  "created_at": "2026-05-01T12:00:00+00:00",
+  "updated_at": "2026-05-01T12:00:00+00:00",
+  "fetched_at": "2026-05-01T12:00:00+00:00"
+}
+```
+
+`404 Not Found`
+
+```json
+{
+  "detail": "Repository not found."
+}
+```
 
 ### PUT /repos/{id}
 
-Refresh the stored repository metadata from GitHub.
+Refreshes an existing stored repository by re-fetching metadata from GitHub.
 
-Responses:
+`200 OK`
 
-- `200 OK` with the updated record
-- `404 Not Found` if the record does not exist
-- `502 Bad Gateway` if GitHub returns an error
-- `503 Service Unavailable` if GitHub is unreachable or times out
+```json
+{
+  "id": 1,
+  "external_id": "encode/starlette",
+  "full_name": "encode/starlette",
+  "owner": "encode",
+  "name": "starlette",
+  "description": "Updated repository description",
+  "html_url": "https://github.com/encode/starlette",
+  "stargazers_count": 9000,
+  "forks_count": 700,
+  "open_issues_count": 50,
+  "language": "Python",
+  "raw_data": {},
+  "created_at": "2026-05-01T12:00:00+00:00",
+  "updated_at": "2026-05-01T13:00:00+00:00",
+  "fetched_at": "2026-05-01T13:00:00+00:00"
+}
+```
+
+`404 Not Found`
+
+```json
+{
+  "detail": "Repository not found."
+}
+```
+
+If the local record exists but GitHub no longer has the repository:
+
+```json
+{
+  "detail": "Repository not found on GitHub."
+}
+```
+
+`502 Bad Gateway`
+
+```json
+{
+  "detail": "GitHub API returned status 500."
+}
+```
+
+`503 Service Unavailable`
+
+```json
+{
+  "detail": "GitHub API request timed out."
+}
+```
 
 ### DELETE /repos/{id}
 
-Remove the stored repository.
+Deletes a stored repository by local database ID.
 
-Responses:
+`204 No Content`
 
-- `204 No Content` if deleted successfully
-- `404 Not Found` if the record does not exist
+The response body is empty.
+
+`404 Not Found`
+
+```json
+{
+  "detail": "Repository not found."
+}
+```
 
 ## Running the tests
 
 Run all tests:
 
 ```bash
-pytest
+python -m pytest
+```
+
+On Windows, if `pytest` is not on your PATH:
+
+```bash
+.venv\Scripts\python -m pytest
 ```
 
 Run unit tests only:
 
 ```bash
-pytest tests/unit/
+python -m pytest tests/unit/
 ```
 
 Run integration tests only:
 
 ```bash
-pytest tests/integration/
+python -m pytest tests/integration/
 ```
+
+The unit tests cover input parsing, validation, GitHub response mapping, and duplicate detection logic. The integration tests cover all four endpoints, required success/error cases, and bonus external API failure responses.
 
 ## Design decisions
 
-- Used the GitHub REST API for repository metadata because it is well-known, stable, and supports URL or `owner/repo` lookup.
-- Used FastAPI with async SQLAlchemy for fully asynchronous request handling and clean separation of layers.
-- Implemented centralized error handling with custom `ServiceError` exceptions and a single FastAPI exception handler.
+- Used GitHub repositories as the external resource because `owner/repo` identifiers are simple to validate before making network calls.
+- Used `httpx.AsyncClient` so external API calls stay non-blocking inside async FastAPI endpoints.
+- Enforced duplicate protection with a database-level unique constraint on `external_id`, while also checking early in the service layer for a clearer `409 Conflict` response.
+- Stored selected metadata columns for easy querying and kept `raw_data` so the full upstream response is still available.
+- Used a lightweight ORM initialization script instead of Alembic to keep the local setup simple for this assessment.
 
 ## Assumptions
 
-- This service stores only GitHub repositories, not users or other GitHub resource types.
-- `POST /repos/` accepts either `url` or `identifier`, but not both.
-- Database initialization is done through `python -m app.init_db` rather than a migration tool.
+- The service supports GitHub repositories only, not users, organizations, gists, or issues.
+- `POST /repos/` accepts exactly one of `url` or `identifier`.
+- A GitHub repository URL is normalized to `owner/repository`; extra path segments after the repository name are ignored.
+- `GITHUB_TOKEN` is optional because public GitHub repository metadata can be fetched without authentication, but rate limits are lower without a token.
 
 ## Troubleshooting
 
-- `Database connection failed`: verify `DATABASE_URL` in `.env` and ensure PostgreSQL is running.
-- `422 Unprocessable Entity`: request body must contain exactly one of `url` or `identifier`, and the identifier must be `owner/repository`.
-- `409 Conflict`: repository already exists in the database.
-- `503 Service Unavailable`: GitHub API requests timed out or could not connect.
+- `Database connection failed`: verify `DATABASE_URL`, confirm PostgreSQL is running, and make sure the database exists.
+- `ModuleNotFoundError`: activate the virtual environment and run `python -m pip install -r requirements.txt`.
+- `422 Unprocessable Entity`: send exactly one of `url` or `identifier`, and use the `owner/repository` format for identifiers.
+- `409 Conflict`: the same GitHub repository is already stored; use `GET`, `PUT`, or `DELETE` with the existing record ID.
+- `503 Service Unavailable`: GitHub may be unreachable, DNS may be failing, or the configured timeout may be too low.
 
 ## Notes
 
-- `.env.example` shows the required configuration values.
-- The app uses `pytest-asyncio` for async tests.
+- `.env.example` lists the required configuration variables with placeholder values.
+- `.env`, virtual environments, Python cache files, and logs are excluded by `.gitignore`.
+- Docker support is not included; this project uses local PostgreSQL plus the database initialization script.
